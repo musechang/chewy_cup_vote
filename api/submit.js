@@ -1,4 +1,9 @@
-import { kv } from '@vercel/kv';
+import { Redis } from '@upstash/redis';
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -11,7 +16,7 @@ export default async function handler(req, res) {
   if (!code || !voterId) return res.status(400).json({ error: 'Missing code or voterId' });
 
   // Check duplicate vote
-  const already = await kv.get(`voter:${voterId}`);
+  const already = await redis.get(`voter:${voterId}`);
   if (already) return res.status(409).json({ error: 'Already voted' });
 
   // Parse code: CHEWY123:t1,t2,...,Sxxx,Mxxx
@@ -20,18 +25,16 @@ export default async function handler(req, res) {
 
   const tokens = match[1].split(',');
 
-  // Tally votes
-  const pipeline = kv.pipeline();
+  // Tally votes via pipeline
+  const pipeline = redis.pipeline();
   for (const token of tokens) {
     if (!token || token === 'SKIP') continue;
-    // Strip S/M prefix for senior/memorial groups
     const id = token.replace(/^[SM]/, '');
     if (/^\d+$/.test(id)) {
       pipeline.hincrby('votes', id, 1);
     }
   }
-  // Mark voter as done
-  pipeline.set(`voter:${voterId}`, Date.now(), { ex: 60 * 60 * 24 * 30 }); // 30 days
+  pipeline.set(`voter:${voterId}`, Date.now(), { ex: 60 * 60 * 24 * 30 });
   pipeline.incr('total_voters');
   await pipeline.exec();
 
